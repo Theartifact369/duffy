@@ -26,20 +26,38 @@ func TestLayoutFitsWidth(t *testing.T) {
 	}
 	for _, w := range []int{16, 17, 20, 24, 30, 40, 60, 80, 120, 200} {
 		out := render(w)
-		sizeW, pctW, barW, mountW := devLayout(w - 2)
-		if sizeW < 4 || pctW < 0 || barW < 0 || mountW < 0 {
-			t.Fatalf("width %d: bad columns (%d,%d,%d,%d)", w, sizeW, pctW, barW, mountW)
+		sizeW, pctW, barW, devW, mountW := devLayout(w - 2)
+		if sizeW < 4 || pctW < 0 || barW < 0 || devW < 0 || mountW < 0 {
+			t.Fatalf("width %d: bad columns (%d,%d,%d,%d,%d)", w, sizeW, pctW, barW, devW, mountW)
 		}
 		// simulate the terminal: cursor wraps at col w, and any rune that
 		// lands past it means a row overflowed the frame
 		col := 1
+		rowLen := 0
+		var widths []int
+		flush := func() {
+			if rowLen > 0 {
+				widths = append(widths, rowLen)
+			}
+			rowLen = 0
+		}
 		for range ansi.ReplaceAllString(out, "") {
 			if col > w {
 				t.Fatalf("width %d: row overflow", w)
 			}
 			col++
+			rowLen++
 			if col > w {
 				col = 1
+				flush()
+			}
+		}
+		flush()
+		// every boxed row must be exactly w cells; the trailing hint line
+		// is plain text and is allowed to be shorter
+		for i, rl := range widths[:len(widths)-1] {
+			if rl != w {
+				t.Fatalf("width %d: row %d is %d cells, want %d (misaligned frame)", w, i, rl, w)
 			}
 		}
 	}

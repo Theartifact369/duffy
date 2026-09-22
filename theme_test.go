@@ -113,7 +113,7 @@ func TestBarBraille(t *testing.T) {
 	th := DefaultTheme()
 	a := NewApp(th, nil, false, "", "")
 	var b strings.Builder
-	a.bar(&b, 0.5, 4) // half of 4 cells -> 2 filled, 2 tray
+	a.bar(&b, 0.5, 4, "#9aa124") // half of 4 cells -> 2 filled, 2 tray
 	out := b.String()
 	full := strings.Count(out, "⣿") + strings.Count(out, "⢸")
 	if want := 2; full != want {
@@ -121,6 +121,18 @@ func TestBarBraille(t *testing.T) {
 	}
 	if !strings.Contains(out, "⣀") {
 		t.Errorf("expected tray glyphs ⣀ in %q", out)
+	}
+}
+
+func TestFullnessWarn(t *testing.T) {
+	a := NewApp(DefaultTheme(), []Mount{
+		{Device: "/dev/sdb1", Mountpoint: "/mnt/full", Total: 100, Used: 95, Avail: 5, Mounted: true},
+	}, false, "", "")
+	a.w, a.h = 40, 10
+	var b strings.Builder
+	a.drawDevices(&b)
+	if !strings.Contains(b.String(), "229;72;77") { // warnColor fg seq
+		t.Fatal("95% full mount did not render in warn color")
 	}
 }
 
