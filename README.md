@@ -21,6 +21,10 @@ A small disk-usage TUI that shares btop's look and theme files.
   match out of the box. Edit `~/.config/btop/themes/*.theme` and both change.
   Usage bars, the activity graphs, and the pie chart all use btop's dotted
   braille glyphs (`⣿⢸⣀`).
+- **System colors** — by default duffy follows the live system palette
+  (Omarchy's colors.toml, or a theme's own btop.theme), re-checked every
+  refresh tick, so a wallpaper or theme switch repaints a running duffy
+  without a restart; you don't run duffy with a theme to get this.
 - **Theme menu** — press `m` to pick from your themes plus the Omarchy system
   theme; the choice persists in `~/.config/duffy/config`.
 - Read-only browsing; mount/unmount on the devices view via udisks2

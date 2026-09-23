@@ -180,7 +180,8 @@ func (a *App) run() error {
 				a.draw() // progressive repaint while scanning
 			}
 		case <-refresh.C:
-			if a.dir == "" { // devices view: pick up newly plugged drives
+			a.syncSystemTheme() // repaint on wallpaper/theme changes
+			if a.dir == "" {    // devices view: pick up newly plugged drives
 				a.mounts = Mounts(a.all)
 				if a.sel > len(a.mounts)-1 {
 					a.sel = len(a.mounts) - 1
@@ -575,6 +576,20 @@ func themeKey(spec string) string {
 		return ""
 	}
 	return spec
+}
+
+// syncSystemTheme re-resolves the system palette on the refresh tick when the
+// active theme is the system default, so changing the wallpaper or omarchy
+// theme repaints a running duffy without a restart. Manually chosen themes
+// (any other spec) are left alone.
+func (a *App) syncSystemTheme() {
+	if s := a.themeSpec; s != "" && s != "system" {
+		return
+	}
+	t, _ := SystemTheme()
+	if t != a.theme {
+		a.theme = t
+	}
 }
 
 // text writes s with fg and optional bg, then restores the base background.

@@ -27,16 +27,11 @@ var builtin = Theme{
 
 func DefaultTheme() Theme { return builtin }
 
-// LoadTheme resolves a theme by name the way btop does: name -> file in a
-// themes dir. duffy checks its own themes dir, then falls back to btop's, so
-// both apps can share palette files. A missing file yields the builtin
-// palette and found=false.
-func LoadTheme(name string) (Theme, bool) {
+// loadThemeFile parses a btop .theme file (theme[key]="value" lines) into a
+// Theme, falling back to builtin values for missing keys. found=false when
+// the file can't be read.
+func loadThemeFile(p string) (Theme, bool) {
 	t := builtin
-	p := themePath(name)
-	if p == "" {
-		return t, false
-	}
 	k := map[string]string{}
 	f, err := os.Open(p)
 	if err != nil {
@@ -83,6 +78,18 @@ func LoadTheme(name string) (Theme, bool) {
 	return t, true
 }
 
+// LoadTheme resolves a theme by name the way btop does: name -> file in a
+// themes dir. duffy checks its own themes dir, then falls back to btop's, so
+// both apps can share palette files. A missing file yields the builtin
+// palette and found=false.
+func LoadTheme(name string) (Theme, bool) {
+	p := themePath(name)
+	if p == "" {
+		return builtin, false
+	}
+	return loadThemeFile(p)
+}
+
 func pick(k map[string]string, key, def string) string {
 	if v, ok := k[key]; ok {
 		return v
@@ -122,6 +129,117 @@ func stockThemePath(name string) string {
 		return p
 	}
 	return ""
+}
+
+// currentThemeSlug returns the active Omarchy theme's slug (dir name), or ""
+// when omarchy keeps no state (non-Omarchy systems).
+func currentThemeSlug() string {
+	home, _ := os.UserHomeDir()
+	p := filepath.Join(home, ".local", "state", "omarchy", "current", "theme.name")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// themeDir returns the active theme's directory: the user's copy first,
+// then the stock one. "" when the theme isn't installed.
+func themeDir(slug string) string {
+	home, _ := os.UserHomeDir()
+	for _, p := range []string{
+		filepath.Join(home, ".config", "omarchy", "themes", slug),
+		filepath.Join("/usr/share/omarchy/themes", slug),
+	} {
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// themeFromPalette maps an Omarchy theme's colors.toml onto duffy's Theme,
+// mirroring the keys the btop exporter picks: accent=hi_fg,
+// background=main_bg, foreground=main_fg/title, selection=meter_bg and
+// selected_bg, muted=inactive_fg, light_foreground=graph_text. Selected
+// foreground is the accent, like the exported btop themes.
+func themeFromPalette(p string) (Theme, bool) {
+	t := builtin
+	k := map[string]string{}
+	f, err := os.Open(p)
+	if err != nil {
+		return t, false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		i := strings.IndexByte(line, '=')
+		if i < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:i])
+		v := strings.Trim(strings.TrimSpace(line[i+1:]), `"'`)
+		if v != "" {
+			k[key] = v
+		}
+	}
+	t.BG = pick(k, "background", t.BG)
+	t.FG = pick(k, "foreground", t.FG)
+	t.Title = t.FG
+	t.Accent = pick(k, "accent", t.Accent)
+	t.Border = t.Accent
+	t.SelBG = pick(k, "selection", t.SelBG)
+	t.SelFG = t.Accent
+	t.Secondary = pick(k, "muted", t.Secondary)
+	t.Meter = pick(k, "selection", t.Meter)
+	t.Text = pick(k, "light_foreground", t.Text)
+	return t, true
+}
+
+// systemTheme resolves the live system palette into a Theme, preferring the
+// current Omarchy theme's own btop.theme, then its colors.toml. It returns
+// the Theme and the source file ("" when no Omarchy state exists), so the
+// caller can tell "resolved" apart from the builtin fallback.
+func systemTheme() (Theme, string) {
+	slug := currentThemeSlug()
+	if slug == "" {
+		return builtin, ""
+	}
+	dir := themeDir(slug)
+	if dir == "" {
+		return builtin, ""
+	}
+	if p := filepath.Join(dir, "btop.theme"); fileExists(p) {
+		if t, ok := loadThemeFile(p); ok {
+			return t, p
+		}
+	}
+	if p := filepath.Join(dir, "colors.toml"); fileExists(p) {
+		if t, ok := themeFromPalette(p); ok {
+			return t, p
+		}
+	}
+	return builtin, ""
+}
+
+// SystemTheme resolves the active system palette, falling back to btop's
+// current.theme export when Omarchy (or a palette for the current theme)
+// isn't there. found=false only when everything is missing; callers treat
+// that as "draw with the builtin palette".
+func SystemTheme() (Theme, bool) {
+	if t, src := systemTheme(); src != "" {
+		return t, true
+	}
+	return LoadTheme("current")
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // listThemes returns theme names for the menu: *.theme files in
