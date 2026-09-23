@@ -70,12 +70,12 @@ func pieBase(t Theme) []string {
 }
 
 // buildPie renders the devices-view pie: one string per text row, exactly
-// inner runes wide (pie cells + legend + padding, no border). vals are used
+// pieW-1 runes wide (pie cells + legend + padding, no border). vals are used
 // bytes per mount, names their mountpoints. Small slices are grouped into
 // an "other" slice colored Secondary. R is the pie radius, so the chart is
 // (2R+1) cells wide and R+1 text rows tall — round on 2:1 cells. Returns
 // nil when there's no room or nothing to show.
-func (a *App) buildPie(vals []float64, names []string, inner, R int) []string {
+func (a *App) buildPie(vals []float64, names []string, pieW, R int) []string {
 	t := a.theme
 	total := 0.0
 	for _, v := range vals {
@@ -125,7 +125,7 @@ func (a *App) buildPie(vals []float64, names []string, inner, R int) []string {
 	}
 	S := 2*R + 1
 	textRows := (S + 1) / 2
-	maxName := inner - S - 2 - 10 // pie + gap + swatch/space/pct
+	maxName := pieW - S - 2 - 10 // pie + gap + swatch/space/pct
 	if maxName < 3 {
 		return nil
 	}

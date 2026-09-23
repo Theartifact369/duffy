@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -786,6 +787,78 @@ func (a *App) drawDetail(b *strings.Builder, inner int, lines []detailLine) {
 	a.boxBottom(b)
 }
 
+// actRow renders one row of the disk-activity panel next to the pie: a
+// name, an r/w label, a braille bar sized as rate/peak, and the live rate.
+func (a *App) actRow(w, nameW, rateW, barW int, name, label, hi string, rate, peak float64) string {
+	t := a.theme
+	var b strings.Builder
+	name += strings.Repeat(" ", max(0, nameW-utf8.RuneCountInString(name)))
+	a.text(&b, name, t.Title, "")
+	a.text(&b, " "+label+" ", t.Secondary, "")
+	frac := 0.0
+	if peak > 0 {
+		frac = rate / peak
+	}
+	a.bar(&b, frac, barW, hi) // bar() clamps 0..1
+	a.text(&b, " ", t.Secondary, "")
+	a.text(&b, padR(formatRate(rate), rateW), t.Text, "")
+	s := b.String()
+	if vis := visRunes(s); vis < w {
+		s += strings.Repeat(" ", w-vis)
+	}
+	return s
+}
+
+// actLines builds the btop-style disk-activity panel for the "used by
+// device" box: each mount gets a read row and a write row, bars scaled to
+// the busiest mount so they stay comparable, plus live rates. n is the row
+// budget (2 rows per mount); leftover rows are blank so the panel always
+// lines up with the pie.
+func (a *App) actLines(actW, n int) []string {
+	t := a.theme
+	nameW := min(14, actW/3)
+	rateW := 8
+	barW := actW - nameW - rateW - 4 // name + " r " + bar + rate
+	if barW < 0 {
+		barW = 0 // bar() no-ops at w<=0
+	}
+	if barW > 24 {
+		barW = 24
+	}
+
+	peak := 0.0
+	var shown []Mount
+	for _, m := range a.mounts {
+		if !m.Mounted {
+			continue
+		}
+		shown = append(shown, m)
+		if rw := m.Read + m.Write; rw > peak {
+			peak = rw
+		}
+	}
+	// ponytail: busiest mount on top; order can swap between refreshes when
+	// two mounts are near-equal, acceptable for a glanceable panel
+	sort.Slice(shown, func(i, j int) bool {
+		return shown[i].Read+shown[i].Write > shown[j].Read+shown[j].Write
+	})
+
+	rows := make([]string, 0, n)
+	for _, m := range shown {
+		if len(rows)+2 > n {
+			break // keep r/w pairs intact; leftover rows stay blank
+		}
+		name := trunc(m.Mountpoint, nameW)
+		rows = append(rows, a.actRow(actW, nameW, rateW, barW, name, "r", t.Accent, m.Read, peak))
+		rows = append(rows, a.actRow(actW, nameW, rateW, barW, strings.Repeat(" ", nameW), "w", mix(t.Accent, t.BG, 0.45), m.Write, peak))
+	}
+	for len(rows) < n {
+		rows = append(rows, strings.Repeat(" ", actW))
+	}
+	return rows
+}
+
+// drawDevices renders the devices view.
 func (a *App) drawDevices(b *strings.Builder) {
 	t := a.theme
 	n := len(a.mounts)
@@ -819,23 +892,54 @@ func (a *App) drawDevices(b *strings.Builder) {
 		// table keeps at least all n mounts: hint(1) + borders(2) + n +
 		// detailMax + pie(R+3) <= a.h, so R = a.h - 6 - n - detailMax.
 		// The pie can't be wider than the name column allows: legend needs
-		// maxName >= 3, and maxName = inner - (2R+1) - 2 - 10, so
-		// R <= (inner-16)/2. Let both constraints bind — tall/wide terminals
+		// maxName >= 3, and maxName = pieW - (2R+1) - 2 - 10, so
+		// R <= (pieW-16)/2. Let both constraints bind — tall/wide terminals
 		// get the full free-lines chart, not a fixed mid-size.
+		// Wide terminals earn a btop-style disk-activity panel on the right
+		// (per-mount read/write bars); the pie shares the remaining column.
+		actW := 0
+		if a.w >= 94 {
+			actW = clamp(inner/3, 26, 44)
+		}
+		pieW := inner - actW
+		// leave two cells of breathing room before the activity panel
+		pieBudget := pieW
+		if actW > 0 {
+			pieBudget = pieW - 2
+		}
 		R := a.h - 6 - len(a.mounts) - detailMax
-		if maxR := (inner - 16) / 2; R > maxR {
+		if maxR := (pieBudget - 16) / 2; R > maxR {
 			R = maxR
 		}
 		if R < 7 {
 			R = 7
 		}
-		if lines := a.buildPie(vals, names, inner, R); lines != nil {
+		lines := a.buildPie(vals, names, pieBudget, R)
+		var acts []string
+		if lines == nil && actW > 0 {
+			// pie couldn't share the width — give it the full frame
+			actW, pieBudget = 0, inner
+			if maxR := (pieBudget - 16) / 2; R > maxR {
+				R = maxR
+			}
+			if R < 7 {
+				R = 7
+			}
+			lines = a.buildPie(vals, names, pieBudget, R)
+		} else if lines != nil {
+			acts = a.actLines(actW, len(lines))
+		}
+		if lines != nil {
 			pieBox = len(lines) + 2 // rows inside, plus top/bottom borders
 			a.boxTop(b, inner, "used by device")
-			for _, l := range lines {
+			for i, l := range lines {
 				b.WriteString(fgSeq(t.Border))
 				b.WriteString("│ ")
 				b.WriteString(l)
+				if i < len(acts) {
+					b.WriteString("  ")
+					b.WriteString(acts[i])
+				}
 				b.WriteString(fgSeq(t.Border))
 				b.WriteString("│")
 				b.WriteString(reset)

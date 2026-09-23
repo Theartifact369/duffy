@@ -5,7 +5,9 @@ A small disk-usage TUI that shares btop's look and theme files.
 - **Devices view** — df-style table of mounts with a device column, usage
   bars (like duf), a used-space pie chart in its own box above the table
   (six largest slices + "other") when the terminal is wide and tall enough,
-  and nearly-full mounts (≥ 90%) flagged in red. The device list
+  and nearly-full mounts (≥ 90%) flagged in red. On wide terminals the pie
+  box also carries a btop-style disk-activity panel beside the chart: live
+  read/write bars and rates per mount, busiest on top. The device list
   auto-refreshes every 2 s, so plugged-in drives appear on their own.
   Selecting a mount shows a deep-dive box below the list: inode usage bar,
   live read/write rates (from `/proc/diskstats`), and the biggest
