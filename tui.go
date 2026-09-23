@@ -608,8 +608,11 @@ func (a *App) text(b *strings.Builder, s, fgC, bgC string) {
 }
 
 // bar draws a btop-style braille meter: dotted ⣿ cells for the used part
-// (partial boundary cell in ⢀/⢸), ⣀ bottom-dot cells for the tray. hi is
-// the color of the filled cells (Accent normally, warnColor when full).
+// (partial boundary cell in ⢀/⢸), ⣀ bottom-dot cells for the tray. The
+// fill shades from UsedStart (light) to UsedEnd (dark) left to right, like
+// btop's mem/disk meters, so how full the thing is reads at a glance;
+// warnColor (a near-full disk) stays solid to keep the alarm visible. hi is
+// the fill color when not gradient (solid accent or the warn alarm).
 func (a *App) bar(b *strings.Builder, frac float64, w int, hi string) {
 	if w <= 0 {
 		return
@@ -622,13 +625,18 @@ func (a *App) bar(b *strings.Builder, frac float64, w int, hi string) {
 	}
 	b.WriteString(bgSeq(a.theme.Meter))
 	level := frac * float64(w) // continuous filled cells
+	grad := a.theme.UsedStart != "" && a.theme.UsedMid != "" && a.theme.UsedEnd != ""
 	for i := 0; i < w; i++ {
 		cell := level - float64(i) // fill fraction of this cell, 0..1
+		col := hi
+		if grad && col != warnColor {
+			col = usedColor(a.theme, float64(i)/float64(w))
+		}
 		if cell >= 1 {
-			b.WriteString(fgSeq(hi))
+			b.WriteString(fgSeq(col))
 			b.WriteString("⣿")
 		} else if cell > 0 {
-			b.WriteString(fgSeq(hi))
+			b.WriteString(fgSeq(col))
 			b.WriteString(meterCell(cell))
 		} else {
 			b.WriteString(fgSeq(a.theme.Secondary))
@@ -639,6 +647,16 @@ func (a *App) bar(b *strings.Builder, frac float64, w int, hi string) {
 	if a.theme.BG != "" {
 		b.WriteString(bgSeq(a.theme.BG))
 	}
+}
+
+// usedColor returns the used-meter ramp color at position pos in [0,1]
+// (fraction of the bar's width): UsedStart -> UsedMid -> UsedEnd, light to
+// dark.
+func usedColor(t Theme, pos float64) string {
+	if pos < 0.5 {
+		return mix(t.UsedStart, t.UsedMid, pos*2)
+	}
+	return mix(t.UsedMid, t.UsedEnd, (pos-0.5)*2)
 }
 
 // meterCell returns the braille glyph for a partially filled cell.
@@ -704,21 +722,21 @@ func (a *App) histGraph(b *strings.Builder, vals []float64, w int, peak float64,
 	}
 }
 
-func (a *App) boxTop(b *strings.Builder, inner int, title string) {
+func (a *App) boxTop(b *strings.Builder, inner int, title, col string) {
 	t := a.theme
 	title = trunc(title, max(0, inner-8))
 	dashes := max(0, a.w-5-utf8.RuneCountInString(title))
-	b.WriteString(fgSeq(t.Border))
+	b.WriteString(fgSeq(col))
 	b.WriteString("╭─ ")
 	a.text(b, title, t.Title, "")
-	b.WriteString(fgSeq(t.Border))
+	b.WriteString(fgSeq(col))
 	b.WriteString(" ")
 	b.WriteString(strings.Repeat("─", dashes))
 	b.WriteString("╮")
 }
 
-func (a *App) boxBottom(b *strings.Builder) {
-	b.WriteString(fgSeq(a.theme.Border))
+func (a *App) boxBottom(b *strings.Builder, col string) {
+	b.WriteString(fgSeq(col))
 	b.WriteString("╰" + strings.Repeat("─", max(0, a.w-2)) + "╯")
 	b.WriteString(reset)
 	if a.theme.BG != "" {
@@ -843,9 +861,9 @@ func visRunes(s string) int {
 func (a *App) drawDetail(b *strings.Builder, inner int, lines []detailLine) {
 	t := a.theme
 	m := a.mounts[a.sel]
-	a.boxTop(b, inner, "detail · "+truncHead(m.Device, max(12, inner-12)))
+	a.boxTop(b, inner, "detail · "+truncHead(m.Device, max(12, inner-12)), t.BoxCPU)
 	for _, ln := range lines {
-		b.WriteString(fgSeq(t.Border))
+		b.WriteString(fgSeq(t.BoxCPU))
 		b.WriteString("│ ")
 		if vis := visRunes(ln.l); vis < inner-1 {
 			ln.l += strings.Repeat(" ", inner-1-vis)
@@ -858,14 +876,14 @@ func (a *App) drawDetail(b *strings.Builder, inner int, lines []detailLine) {
 		if t.BG != "" {
 			b.WriteString(bgSeq(t.BG))
 		}
-		b.WriteString(fgSeq(t.Border))
+		b.WriteString(fgSeq(t.BoxCPU))
 		b.WriteString("│")
 		b.WriteString(reset)
 		if t.BG != "" {
 			b.WriteString(bgSeq(t.BG))
 		}
 	}
-	a.boxBottom(b)
+	a.boxBottom(b, t.BoxCPU)
 }
 
 // pushHist records this tick's rates for each mounted mount, keeping the
@@ -892,7 +910,7 @@ func (a *App) pushHist() {
 	}
 }
 
-// piePanel builds the right-hand column of the "used by device" box: the
+// piePanel builds the right-hand column of the "Disk Usage" box: the
 // pie's key and its btop-style disk-activity readout in one. Each slice
 // gets two rows — a head row (swatch, name, share, read history and rate)
 // and a write row — so every mount's name appears exactly once, next to
@@ -1062,7 +1080,11 @@ func (a *App) drawDevices(b *strings.Builder) {
 			if sl := pieSlices(vals, names); rightW >= 36 {
 				panel = a.piePanel(sl, rightW, len(lines))
 			}
-			a.boxTop(b, inner, "used by device")
+			title := "Disk Usage"
+			if a.sel >= 0 && a.sel < len(a.mounts) {
+				title = "Disk Usage: " + truncHead(a.mounts[a.sel].Device, max(12, inner-12))
+			}
+			a.boxTop(b, inner, title, t.BoxMem)
 			for i, l := range lines {
 				row := l
 				if i < len(panel) {
@@ -1071,17 +1093,17 @@ func (a *App) drawDevices(b *strings.Builder) {
 				if vis := visRunes(row); vis < inner-1 {
 					row += strings.Repeat(" ", inner-1-vis)
 				}
-				b.WriteString(fgSeq(t.Border))
+				b.WriteString(fgSeq(t.BoxMem))
 				b.WriteString("│ ")
 				b.WriteString(row)
-				b.WriteString(fgSeq(t.Border))
+				b.WriteString(fgSeq(t.BoxMem))
 				b.WriteString("│")
 				b.WriteString(reset)
 				if t.BG != "" {
 					b.WriteString(bgSeq(t.BG))
 				}
 			}
-			a.boxBottom(b)
+			a.boxBottom(b, t.BoxMem)
 		}
 	}
 
@@ -1097,7 +1119,7 @@ func (a *App) drawDevices(b *strings.Builder) {
 	if a.all {
 		title = fmt.Sprintf("%d filesystems", n)
 	}
-	a.boxTop(b, inner, title)
+	a.boxTop(b, inner, title, t.BoxProc)
 
 	sizeW, pctW, barW, devW, mountW := devLayout(inner)
 
@@ -1111,7 +1133,7 @@ func (a *App) drawDevices(b *strings.Builder) {
 	for i := top; i < min(n, top+rows); i++ {
 		m := a.mounts[i]
 		sel := i == a.sel
-		b.WriteString(fgSeq(t.Border))
+		b.WriteString(fgSeq(t.BoxProc))
 		b.WriteString("│ ")
 		rowBG, rowFG := "", t.FG
 		if sel {
@@ -1129,7 +1151,7 @@ func (a *App) drawDevices(b *strings.Builder) {
 		if !m.Mounted {
 			rest := 3*sizeW + pctW + barW
 			a.text(b, trunc("not mounted", rest)+strings.Repeat(" ", max(0, rest-utf8.RuneCountInString("not mounted"))), t.Secondary, rowBG)
-			b.WriteString(fgSeq(t.Border))
+			b.WriteString(fgSeq(t.BoxProc))
 			b.WriteString("│")
 			b.WriteString(reset)
 			if t.BG != "" {
@@ -1150,14 +1172,14 @@ func (a *App) drawDevices(b *strings.Builder) {
 			hi = warnColor
 		}
 		a.bar(b, use, barW, hi)
-		b.WriteString(fgSeq(t.Border))
+		b.WriteString(fgSeq(t.BoxProc))
 		b.WriteString("│")
 		b.WriteString(reset)
 		if t.BG != "" {
 			b.WriteString(bgSeq(t.BG))
 		}
 	}
-	a.boxBottom(b)
+	a.boxBottom(b, t.BoxProc)
 	if len(detail) > 0 {
 		a.drawDetail(b, inner, detail)
 	}
@@ -1175,7 +1197,7 @@ func (a *App) drawDir(b *strings.Builder) {
 	t := a.theme
 	entries, done, count := a.scan.Snapshot()
 	inner := max(0, a.w-2)
-	a.boxTop(b, inner, a.dir)
+	a.boxTop(b, inner, a.dir, t.BoxProc)
 
 	sizeW, barW, nameW := dirLayout(inner)
 
@@ -1191,7 +1213,7 @@ func (a *App) drawDir(b *strings.Builder) {
 		biggest = entries[0].Size
 	}
 	for i := top; i < min(len(entries)+1, top+rows); i++ {
-		b.WriteString(fgSeq(t.Border))
+		b.WriteString(fgSeq(t.BoxProc))
 		b.WriteString("│ ")
 		sel := i == a.dirSel
 		rowBG, rowFG := "", t.FG
@@ -1202,7 +1224,7 @@ func (a *App) drawDir(b *strings.Builder) {
 			a.text(b, ".."+strings.Repeat(" ", max(0, nameW-2)), rowFG, rowBG)
 			a.text(b, strings.Repeat(" ", sizeW), t.Text, rowBG)
 			a.bar(b, 0, barW, t.Accent)
-			b.WriteString(fgSeq(t.Border))
+			b.WriteString(fgSeq(t.BoxProc))
 			b.WriteString("│")
 			b.WriteString(reset)
 			if t.BG != "" {
@@ -1223,14 +1245,14 @@ func (a *App) drawDir(b *strings.Builder) {
 			frac = float64(e.Size) / float64(biggest)
 		}
 		a.bar(b, frac, barW, t.Accent)
-		b.WriteString(fgSeq(t.Border))
+		b.WriteString(fgSeq(t.BoxProc))
 		b.WriteString("│")
 		b.WriteString(reset)
 		if t.BG != "" {
 			b.WriteString(bgSeq(t.BG))
 		}
 	}
-	a.boxBottom(b)
+	a.boxBottom(b, t.BoxProc)
 	msg := ""
 	if !done {
 		msg = fmt.Sprintf("scanning %d files…", count)

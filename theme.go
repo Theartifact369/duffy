@@ -15,6 +15,15 @@ type Theme struct {
 	BG, FG, Title, Border  string
 	Accent, SelBG, SelFG   string
 	Secondary, Meter, Text string
+
+	// per-box border colors, like btop's cpu/mem/net/proc boxes; each box in
+	// a view gets a distinct one so the layout reads at a glance
+	BoxCPU, BoxMem, BoxNet, BoxProc string
+
+	// used-meter ramp: the space-capacity bar shades from UsedStart (light,
+	// low usage) through UsedMid to UsedEnd (dark, full), like btop's mem
+	// and disk meters
+	UsedStart, UsedMid, UsedEnd string
 }
 
 // builtin is the fallback palette: Aether, this machine's btop look.
@@ -23,6 +32,13 @@ var builtin = Theme{
 	Accent: "#9aa124", SelBG: "#27261a", SelFG: "#9aa124",
 	Secondary: "#666760", Meter: "#27261a", Text: "#eaeada",
 	Border: "#9aa124", // box borders share the accent color
+	// distinct border shades so a theme missing box colors still separates
+	// its boxes: table olive, pie lighter, detail darker, dir slate-blue
+	BoxCPU: "#9aa124", BoxMem: mix("#9aa124", "#ffffff", 0.45),
+	BoxNet: mix("#9aa124", "#000000", 0.45), BoxProc: mix("#9aa124", "#4d7fff", 0.3),
+	// olive used-ramp: light olive -> olive -> near-black
+	UsedStart: mix("#9aa124", "#ffffff", 0.55), UsedMid: "#9aa124",
+	UsedEnd: mix("#9aa124", "#000000", 0.5),
 }
 
 func DefaultTheme() Theme { return builtin }
@@ -75,6 +91,13 @@ func loadThemeFile(p string) (Theme, bool) {
 	t.Secondary = pick(k, "inactive_fg", t.Secondary)
 	t.Meter = pick(k, "meter_bg", t.Meter)
 	t.Text = pick(k, "graph_text", t.Text)
+	t.BoxCPU = pick(k, "cpu_box", t.BoxCPU)
+	t.BoxMem = pick(k, "mem_box", t.BoxMem)
+	t.BoxNet = pick(k, "net_box", t.BoxNet)
+	t.BoxProc = pick(k, "proc_box", t.BoxProc)
+	t.UsedStart = pick(k, "used_start", t.UsedStart)
+	t.UsedMid = pick(k, "used_mid", t.UsedMid)
+	t.UsedEnd = pick(k, "used_end", t.UsedEnd)
 	return t, true
 }
 
@@ -197,6 +220,15 @@ func themeFromPalette(p string) (Theme, bool) {
 	t.Secondary = pick(k, "muted", t.Secondary)
 	t.Meter = pick(k, "selection", t.Meter)
 	t.Text = pick(k, "light_foreground", t.Text)
+	// the btop export mirrors the aether palette this way: cpu=magenta,
+	// mem=green, net=red, proc=blue; the used meter is green->cyan->blue
+	t.BoxCPU = pick(k, "magenta", t.BoxCPU)
+	t.BoxMem = pick(k, "green", t.BoxMem)
+	t.BoxNet = pick(k, "red", t.BoxNet)
+	t.BoxProc = pick(k, "blue", t.BoxProc)
+	t.UsedStart = pick(k, "green", t.UsedStart)
+	t.UsedMid = pick(k, "cyan", t.UsedMid)
+	t.UsedEnd = pick(k, "blue", t.UsedEnd)
 	return t, true
 }
 

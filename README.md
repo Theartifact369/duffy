@@ -4,7 +4,8 @@ A small disk-usage TUI that shares btop's look and theme files.
 
 - **Devices view** — df-style table of mounts with a device column, usage
   bars (like duf), a used-space pie chart in its own box above the table
-  (five largest slices + "other") when the terminal is wide and tall enough,
+  (titled `Disk Usage: <selected device>`, five largest slices + "other")
+  when the terminal is wide and tall enough,
   and nearly-full mounts (≥ 90%) flagged in red. The pie's key shares the
   box with a btop-style disk-activity readout: each slice gets two rows —
   swatch, name, share, and per-mount read/write history graphs (~2.4 min of
@@ -20,7 +21,10 @@ A small disk-usage TUI that shares btop's look and theme files.
 - **btop theming** — reads btop `.theme` files directly, so `duffy` and `btop`
   match out of the box. Edit `~/.config/btop/themes/*.theme` and both change.
   Usage bars, the activity graphs, and the pie chart all use btop's dotted
-  braille glyphs (`⣿⢸⣀`).
+  braille glyphs (`⣿⢸⣀`). The three boxes get distinct border colors from
+  btop's `cpu_box`/`mem_box`/`net_box`/`proc_box` theme keys, and the
+  space-capacity bars shade from light to dark (btop's `used_start` →
+  `used_mid` → `used_end`), so how full a disk is reads at a glance.
 - **System colors** — by default duffy follows the live system palette
   (Omarchy's colors.toml, or a theme's own btop.theme), re-checked every
   refresh tick, so a wallpaper or theme switch repaints a running duffy

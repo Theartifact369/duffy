@@ -194,6 +194,12 @@ muted = "#45475a"
 background = "#1e1e2e"
 foreground = "#cdd6f4"
 light_foreground = "#d5dcf6"
+magenta = "#cba6f7"
+green = "#a6e3a1"
+red = "#f38ba8"
+yellow = "#f9e2af"
+blue = "#89b4fa"
+cyan = "#94e2d5"
 `
 	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -222,6 +228,62 @@ light_foreground = "#d5dcf6"
 	}
 	if th.SelFG != "#89b4fa" {
 		t.Errorf("SelFG = %q, want accent", th.SelFG)
+	}
+	// box borders: cpu=magenta, mem=green, net=red, proc=blue (btop export's
+	// mapping of the same palette), so the three boxes get distinct borders
+	if th.BoxCPU != "#cba6f7" || th.BoxMem != "#a6e3a1" {
+		t.Errorf("BoxCPU/BoxMem = %q/%q, want #cba6f7/#a6e3a1", th.BoxCPU, th.BoxMem)
+	}
+	if th.BoxNet != "#f38ba8" || th.BoxProc != "#89b4fa" {
+		t.Errorf("BoxNet/BoxProc = %q/%q, want #f38ba8/#89b4fa", th.BoxNet, th.BoxProc)
+	}
+	// used ramp: green -> cyan -> blue, light to dark as the bar fills
+	if th.UsedStart != "#a6e3a1" || th.UsedMid != "#94e2d5" || th.UsedEnd != "#89b4fa" {
+		t.Errorf("used ramp = %q/%q/%q, want #a6e3a1/#94e2d5/#89b4fa", th.UsedStart, th.UsedMid, th.UsedEnd)
+	}
+	// distinct box borders are a real .theme concern too: a file that ships
+	// only some keys keeps the builtin's distinct defaults for the rest
+	f := filepath.Join(t.TempDir(), "t.theme")
+	if err := os.WriteFile(f, []byte("theme[mem_box]=\"#111111\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lt, ok := loadThemeFile(f)
+	if !ok {
+		t.Fatal("expected found")
+	}
+	if lt.BoxMem != "#111111" || lt.BoxCPU == "#111111" {
+		t.Errorf("partial theme box colors = mem %q cpu %q, want mem overridden, cpu distinct", lt.BoxMem, lt.BoxCPU)
+	}
+}
+
+// TestUsedGradient checks the capacity bar's light-to-dark ramp: left edge
+// is UsedStart, right edge UsedEnd, midpoints interpolate so a half bar is
+// visibly lighter than a full one.
+func TestUsedGradient(t *testing.T) {
+	th := builtin
+	if c := usedColor(th, 0); c != th.UsedStart {
+		t.Errorf("usedColor(0) = %q, want %q", c, th.UsedStart)
+	}
+	if c := usedColor(th, 1); c != th.UsedEnd {
+		t.Errorf("usedColor(1) = %q, want %q", c, th.UsedEnd)
+	}
+	if c := usedColor(th, 0.5); c != th.UsedMid {
+		t.Errorf("usedColor(0.5) = %q, want %q", c, th.UsedMid)
+	}
+	if usedColor(th, 0) == usedColor(th, 0.5) || usedColor(th, 0.5) == usedColor(th, 1) {
+		t.Error("gradient has no visible steps over a full bar")
+	}
+	// a 25% bar (cells 0..w/4) sits on the light end, a 100% bar reaches the
+	// dark end: light -> dark signals how full the disk is
+	a := NewApp(th, nil, false, "", "")
+	var low, full strings.Builder
+	a.bar(&low, 0.5, 8, th.Accent)
+	a.bar(&full, 1.0, 8, th.Accent)
+	if !strings.Contains(low.String(), fgSeq(th.UsedStart)) {
+		t.Error("half bar should contain the light UsedStart cell")
+	}
+	if !strings.Contains(full.String(), fgSeq(usedColor(th, 0.875))) {
+		t.Error("full bar should reach the dark end of the ramp")
 	}
 }
 
