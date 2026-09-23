@@ -96,32 +96,23 @@ func TestTruncAndPad(t *testing.T) {
 	}
 }
 
-func TestMeterCell(t *testing.T) {
-	cases := []struct {
-		f    float64
-		want string
-	}{
-		{0, "⢀"}, {0.49, "⢀"}, {0.5, "⢸"}, {1.5, "⢸"},
-	}
-	for _, c := range cases {
-		if got := meterCell(c.f); got != c.want {
-			t.Errorf("meterCell(%v) = %q, want %q", c.f, got, c.want)
-		}
-	}
-}
-
-func TestBarBraille(t *testing.T) {
+func TestBarSolid(t *testing.T) {
 	th := DefaultTheme()
 	a := NewApp(th, nil, false, "", "")
 	var b strings.Builder
-	a.bar(&b, 0.5, 4, "#9aa124") // half of 4 cells -> 2 filled, 2 tray
+	a.bar(&b, 0.5, 4, "#9aa124") // half of 4 cells -> 2 filled ■, 2 track ■
 	out := b.String()
-	full := strings.Count(out, "⣿") + strings.Count(out, "⢸")
-	if want := 2; full != want {
-		t.Errorf("filled cells = %d, want %d (out: %q)", full, want, out)
+	if got := strings.Count(out, "■"); got != 4 {
+		t.Errorf("bar should render %d solid cells, got %d (out: %q)", 4, got, out)
 	}
-	if !strings.Contains(out, "⣀") {
-		t.Errorf("expected tray glyphs ⣀ in %q", out)
+	// filled cells use the gradient, so "#9aa124"/accent never shows raw;
+	// track cells use meter_bg. half filled => 2 of each.
+	filled := strings.Count(out, "■") - strings.Count(out, fgSeq(a.theme.Meter))
+	if want := 2; filled != want {
+		t.Errorf("filled cells = %d, want %d (out: %q)", filled, want, out)
+	}
+	if strings.Contains(out, "⣀") || strings.Contains(out, "⣿") {
+		t.Errorf("no braille glyphs in solid bar, got %q", out)
 	}
 }
 

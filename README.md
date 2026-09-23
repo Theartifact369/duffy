@@ -20,8 +20,9 @@ A small disk-usage TUI that shares btop's look and theme files.
   biggest-first (like ncdu), with live progress while scanning.
 - **btop theming** — reads btop `.theme` files directly, so `duffy` and `btop`
   match out of the box. Edit `~/.config/btop/themes/*.theme` and both change.
-  Usage bars, the activity graphs, and the pie chart all use btop's dotted
-  braille glyphs (`⣿⢸⣀`). The three boxes get distinct border colors from
+  Usage bars, the activity graphs, and the pie chart all use btop's braille
+  glyphs (`⣿⢸⣀`); the space-capacity bars are solid ■ meters like btop's
+  battery/CPU gauges. The three boxes get distinct border colors from
   btop's `cpu_box`/`mem_box`/`net_box`/`proc_box` theme keys, and the
   space-capacity bars shade from light to dark (btop's `used_start` →
   `used_mid` → `used_end`), so how full a disk is reads at a glance.

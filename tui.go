@@ -607,12 +607,12 @@ func (a *App) text(b *strings.Builder, s, fgC, bgC string) {
 	}
 }
 
-// bar draws a btop-style braille meter: dotted ⣿ cells for the used part
-// (partial boundary cell in ⢀/⢸), ⣀ bottom-dot cells for the tray. The
-// fill shades from UsedStart (light) to UsedEnd (dark) left to right, like
-// btop's mem/disk meters, so how full the thing is reads at a glance;
-// warnColor (a near-full disk) stays solid to keep the alarm visible. hi is
-// the fill color when not gradient (solid accent or the warn alarm).
+// bar draws a btop-style solid meter: filled cells are ■ shaded from
+// UsedStart (light) to UsedEnd (dark) left to right, like btop's
+// mem/disk/battery meters, so how full the thing is reads at a glance;
+// leftover cells stay the meter_bg track. warnColor (a near-full disk)
+// fills every touched cell solid to keep the alarm visible. hi is the fill
+// color when not gradient (solid accent or the warn alarm).
 func (a *App) bar(b *strings.Builder, frac float64, w int, hi string) {
 	if w <= 0 {
 		return
@@ -623,25 +623,21 @@ func (a *App) bar(b *strings.Builder, frac float64, w int, hi string) {
 	if frac > 1 {
 		frac = 1
 	}
-	b.WriteString(bgSeq(a.theme.Meter))
 	level := frac * float64(w) // continuous filled cells
 	grad := a.theme.UsedStart != "" && a.theme.UsedMid != "" && a.theme.UsedEnd != ""
 	for i := 0; i < w; i++ {
-		cell := level - float64(i) // fill fraction of this cell, 0..1
 		col := hi
 		if grad && col != warnColor {
 			col = usedColor(a.theme, float64(i)/float64(w))
 		}
-		if cell >= 1 {
+		cell := level - float64(i) // fill fraction of this cell, 0..1
+		if cell >= 0.5 || (col == warnColor && cell > 0) {
 			b.WriteString(fgSeq(col))
-			b.WriteString("⣿")
-		} else if cell > 0 {
-			b.WriteString(fgSeq(col))
-			b.WriteString(meterCell(cell))
-		} else {
-			b.WriteString(fgSeq(a.theme.Secondary))
-			b.WriteString("⣀")
+			b.WriteString("■")
+			continue
 		}
+		b.WriteString(fgSeq(a.theme.Meter))
+		b.WriteString("■")
 	}
 	b.WriteString(reset)
 	if a.theme.BG != "" {
@@ -659,19 +655,11 @@ func usedColor(t Theme, pos float64) string {
 	return mix(t.UsedMid, t.UsedEnd, (pos-0.5)*2)
 }
 
-// meterCell returns the braille glyph for a partially filled cell.
-func meterCell(f float64) string {
-	if f >= 0.5 {
-		return "⢸"
-	}
-	return "⢀"
-}
-
 // histGraph draws vals (oldest first) as a single-row braille area graph
 // across w cells — 2 samples per cell via braille's 2 dot columns, newest
 // at the right edge — scaled to peak. A cell with no traffic shows the
-// meter tray (⣀), matching bar()'s look so idle rows keep a baseline. hi
-// colors the filled cells (read uses Accent, write a dimmer mix).
+// tray (⣀), so idle rows keep a baseline. hi colors the filled cells (read
+// uses Accent, write a dimmer mix).
 func (a *App) histGraph(b *strings.Builder, vals []float64, w int, peak float64, hi string) {
 	if w <= 0 {
 		return
@@ -697,7 +685,6 @@ func (a *App) histGraph(b *strings.Builder, vals []float64, w int, peak float64,
 		}
 		return l
 	}
-	b.WriteString(bgSeq(a.theme.Meter))
 	pad := 2*w - len(vals) // left-pad zeros so the newest sample sits right
 	for c := 0; c < w; c++ {
 		i := 2*c - pad

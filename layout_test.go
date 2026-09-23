@@ -76,7 +76,7 @@ func TestLayoutFitsWidth(t *testing.T) {
 		a.w, a.h = w, 10
 		var b strings.Builder
 		a.drawDir(&b)
-		bar := strings.Count(b.String(), "⣿") + strings.Count(b.String(), "⢸")
+		bar := strings.Count(b.String(), "■")
 		if bar < last {
 			t.Errorf("width %d: bar shrank (%d < %d)", w, bar, last)
 		}
