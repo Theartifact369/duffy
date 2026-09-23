@@ -18,43 +18,70 @@ func mix(a, b string, t float64) string {
 	return fmt.Sprintf("#%02x%02x%02x", lerp(ra, rb), lerp(ga, gb), lerp(ba, bb))
 }
 
-// piePixel is one pixel of a pie matrix: inside a slice (si) or empty.
-type piePixel struct {
-	in bool
-	si int
+// pieCell is one braille cell of the pie: its dot mask (glyph = 0x2800+mask)
+// and the slice coloring it — the most common slice among the cell's 8 dots,
+// so a boundary cell bleeds to one side's color (cheap, invisible at a
+// glance, and 4× the vertical detail the half-block chart used to have).
+type pieCell struct {
+	mask int
+	si   int
 }
 
-// pieMatrix lays fracs (which must sum to 1) over a (2R+1)² pixel grid: a
-// circle R pixels in radius, slices starting at the top going clockwise.
-// Every two pixel rows become one text row of half-block glyphs, so the
-// chart ends up (2R+1) cells wide and ~R+1 cells tall — round on terminal
-// cells, which are roughly 2:1 tall. (Dividing dy by 2 instead would crop
-// the top/bottom arcs out of the square matrix: the barrel bug.)
-func pieMatrix(R int, fracs []float64) [][]piePixel {
-	S := 2*R + 1
+// pieBraille lays fracs (which must sum to 1) on a (4R+1)² dot grid — 2
+// dots wide, 4 tall per terminal cell — so the chart keeps the half-block
+// version's box footprint but has a much rounder circle. Slices start at
+// the top going clockwise; the whole grid is a filled disc of radius 2R
+// dots, and braille dots are physically square (2 wide × 4 tall per cell).
+func pieBraille(R int, fracs []float64) [][]pieCell {
+	D := 4*R + 1
 	cum := make([]float64, len(fracs)+1)
 	for i, f := range fracs {
 		cum[i+1] = cum[i] + f
 	}
-	m := make([][]piePixel, S)
-	for yp := 0; yp < S; yp++ {
-		m[yp] = make([]piePixel, S)
-		for xp := 0; xp < S; xp++ {
-			dx := float64(xp - R)
-			dy := float64(yp - R)
-			if dx*dx+dy*dy > float64(R*R)-0.4 {
-				continue
-			}
-			// angle from straight up, clockwise, scaled to 0..1
-			t := (math.Atan2(dx, -dy) + math.Pi) / (2 * math.Pi)
-			si := 0
-			for si < len(cum)-2 && t > cum[si+1] {
-				si++
-			}
-			m[yp][xp] = piePixel{true, si}
+	sliceAt := func(dx, dy float64) int {
+		t := (math.Atan2(dx, -dy) + math.Pi) / (2 * math.Pi)
+		si := 0
+		for si < len(cum)-2 && t > cum[si+1] {
+			si++
 		}
+		return si
 	}
-	return m
+	// braille dot bits per column, top row first: left dots 1,2,3,7,
+	// right dots 4,5,6,8
+	bit := [2][4]int{
+		{0x01, 0x02, 0x04, 0x40},
+		{0x08, 0x10, 0x20, 0x80},
+	}
+	cols, rows := (D+1)/2, (D+3)/4
+	out := make([][]pieCell, rows)
+	for cy := 0; cy < rows; cy++ {
+		row := make([]pieCell, cols)
+		for cx := 0; cx < cols; cx++ {
+			var count [9]int // ≥ the 6 slices; keeps the majority scan safe
+			for c := 0; c < 2; c++ {
+				for r := 0; r < 4; r++ {
+					dx := float64(2*cx + c - 2*R)
+					dy := float64(4*cy + r - 2*R)
+					if dx*dx+dy*dy > float64(4*R*R)-0.4 {
+						continue
+					}
+					si := sliceAt(dx, dy)
+					row[cx].mask |= bit[c][r]
+					count[si]++
+				}
+			}
+			for i, n := range count {
+				if n > 0 && n >= count[row[cx].si] {
+					row[cx].si = i
+				}
+			}
+			if row[cx].mask == 0 {
+				row[cx].si = -1
+			}
+		}
+		out[cy] = row
+	}
+	return out
 }
 
 // pieBase is the accent-tinted slice palette, ordered like the slices.
@@ -138,31 +165,18 @@ func (a *App) buildPie(vals []float64, names []string, R int) []string {
 	if R < 2 {
 		return nil
 	}
-	S := 2*R + 1
-	textRows := (S + 1) / 2
-	m := pieMatrix(R, fracs)
+	m := pieBraille(R, fracs) // 2R+1 cells wide, R+1 tall — old footprint
 
-	lines := make([]string, 0, textRows)
-	for r := 0; r < textRows; r++ {
+	lines := make([]string, 0, len(m))
+	for _, row := range m {
 		var pie strings.Builder
-		for xp := 0; xp < S; xp++ {
-			top := m[2*r][xp]
-			var bot piePixel
-			if 2*r+1 < len(m) {
-				bot = m[2*r+1][xp]
-			}
-			switch {
-			case top.in && bot.in && top.si == bot.si:
-				pie.WriteString(fgSeq(sliceColor(t, top.si, sl[top.si].other)) + "█")
-			case top.in && bot.in: // two slices meet in one cell
-				pie.WriteString(fgSeq(sliceColor(t, top.si, sl[top.si].other)) + bgSeq(sliceColor(t, bot.si, sl[bot.si].other)) + "▀")
-			case top.in:
-				pie.WriteString(fgSeq(sliceColor(t, top.si, sl[top.si].other)) + bgSeq(t.BG) + "▀")
-			case bot.in:
-				pie.WriteString(fgSeq(sliceColor(t, bot.si, sl[bot.si].other)) + bgSeq(t.BG) + "▄")
-			default:
+		for _, c := range row {
+			if c.mask == 0 {
 				pie.WriteString(" ")
+				continue
 			}
+			pie.WriteString(fgSeq(sliceColor(t, c.si, sl[c.si].other)))
+			pie.WriteString(string(rune(0x2800 + c.mask)))
 		}
 		pie.WriteString(reset + bgSeq(t.BG))
 		lines = append(lines, pie.String())

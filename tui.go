@@ -100,11 +100,22 @@ type App struct {
 	ioPrev map[string][2]uint64
 	ioAt   time.Time
 
+	// hist keeps the last histCap 2 s rate samples per mountpoint, so the
+	// pie box can draw per-mount read/write history graphs.
+	hist map[string]*rateHist
+
 	// detailPath/detailScan cache the biggest-dirs scan of the selected
 	// mount; restarting only when the selection changes.
 	detailPath string
 	detailScan *Scan
 }
+
+// histCap is the per-mount rate history depth: 2 s per sample, so ~2.4 min
+// at the widest graph (36 cells × 2 samples).
+const histCap = 72
+
+// rateHist is one mount's read/write history, oldest sample first.
+type rateHist struct{ r, w []float64 }
 
 // themeEntry is one row in the theme menu: what the menu shows and what
 // setTheme should load (a name, a path, or "system").
@@ -178,6 +189,7 @@ func (a *App) run() error {
 				attachIO(a.mounts, a.ioPrev, cur, time.Since(a.ioAt).Seconds())
 				a.ioPrev = cur // snapshot for the next refresh
 				a.ioAt = time.Now()
+				a.pushHist()
 				a.draw()
 			}
 		}
@@ -622,6 +634,61 @@ func meterCell(f float64) string {
 	return "⢀"
 }
 
+// histGraph draws vals (oldest first) as a single-row braille area graph
+// across w cells — 2 samples per cell via braille's 2 dot columns, newest
+// at the right edge — scaled to peak. A cell with no traffic shows the
+// meter tray (⣀), matching bar()'s look so idle rows keep a baseline. hi
+// colors the filled cells (read uses Accent, write a dimmer mix).
+func (a *App) histGraph(b *strings.Builder, vals []float64, w int, peak float64, hi string) {
+	if w <= 0 {
+		return
+	}
+	if len(vals) > 2*w {
+		vals = vals[len(vals)-2*w:]
+	}
+	// dot masks per column, bottom row first: left dots 7,3,2,1; right 8,6,5,4
+	col := [2][4]int{
+		{0x40, 0x44, 0x46, 0x47},
+		{0x80, 0xA0, 0xB0, 0xB8},
+	}
+	level := func(v float64) int {
+		if v <= 0 {
+			return 0
+		}
+		l := int(v/peak*3 + 0.5)
+		if l > 3 {
+			l = 3
+		}
+		if l < 1 {
+			l = 1
+		}
+		return l
+	}
+	b.WriteString(bgSeq(a.theme.Meter))
+	pad := 2*w - len(vals) // left-pad zeros so the newest sample sits right
+	for c := 0; c < w; c++ {
+		i := 2*c - pad
+		l, r := 0, 0
+		if i >= 0 {
+			l = level(vals[i])
+			if i+1 < len(vals) {
+				r = level(vals[i+1])
+			}
+		}
+		mask := col[0][l] | col[1][r]
+		if mask == 0xC0 { // bottom tray only
+			b.WriteString(fgSeq(a.theme.Secondary))
+		} else {
+			b.WriteString(fgSeq(hi))
+		}
+		b.WriteString(string(rune(0x2800 + mask)))
+	}
+	b.WriteString(reset)
+	if a.theme.BG != "" {
+		b.WriteString(bgSeq(a.theme.BG))
+	}
+}
+
 func (a *App) boxTop(b *strings.Builder, inner int, title string) {
 	t := a.theme
 	title = trunc(title, max(0, inner-8))
@@ -786,71 +853,117 @@ func (a *App) drawDetail(b *strings.Builder, inner int, lines []detailLine) {
 	a.boxBottom(b)
 }
 
+// pushHist records this tick's rates for each mounted mount, keeping the
+// last histCap samples so the pie box can draw per-mount history graphs.
+func (a *App) pushHist() {
+	if a.hist == nil {
+		a.hist = make(map[string]*rateHist, len(a.mounts))
+	}
+	for _, m := range a.mounts {
+		if !m.Mounted {
+			continue
+		}
+		h := a.hist[m.Mountpoint]
+		if h == nil {
+			h = &rateHist{}
+			a.hist[m.Mountpoint] = h
+		}
+		h.r = append(h.r, m.Read)
+		h.w = append(h.w, m.Write)
+		if len(h.r) > histCap {
+			h.r = h.r[len(h.r)-histCap:]
+			h.w = h.w[len(h.w)-histCap:]
+		}
+	}
+}
+
 // piePanel builds the right-hand column of the "used by device" box: the
 // pie's key and its btop-style disk-activity readout in one. Each slice
-// gets two rows — a head row (swatch, name, share, read bar and rate) and
-// a write row — so every mount's name appears exactly once, next to both
-// its share and its live r/w. The "other" slice sums its mounts' rates. n
-// is the row budget (2 per slice); leftover rows stay blank so the panel
-// lines up with the chart.
+// gets two rows — a head row (swatch, name, share, read history and rate)
+// and a write row — so every mount's name appears exactly once, next to
+// both its share and its live r/w. The "other" slice sums its mounts'
+// histories. n is the row budget (2 per slice); leftover rows stay blank
+// so the panel lines up with the chart.
 func (a *App) piePanel(sl []pieSlice, rightW, n int) []string {
 	t := a.theme
 	nameW := min(30, max(6, rightW-42))
 	rateW := 8
-	barW := rightW - nameW - rateW - 14 // swatch(2)+3 spaces+pct(6)+label+bar+rate
-	if barW > 36 {
-		barW = 36
+	graphW := rightW - nameW - rateW - 14 // swatch(2)+3 spaces+pct(6)+label+graph+rate
+	if graphW > 36 {
+		graphW = 36
 	}
-	if barW < 0 {
-		barW = 0 // bar() no-ops at w<=0
+	if graphW < 0 {
+		graphW = 0 // histGraph no-ops at w<=0
 	}
 	indent := strings.Repeat(" ", nameW+10) // everything before the r/w label
 
-	// rates: the matching mount for real slices, summed mounts for "other"
+	// series: the matching mount's history for real slices; "other"
+	// right-aligns and sums its mounts' histories so it stays comparable.
 	top := make(map[string]bool, len(sl))
 	for _, s := range sl {
 		if !s.other {
 			top[s.name] = true
 		}
 	}
-	rate := func(s pieSlice) (r, w float64) {
-		for _, m := range a.mounts {
-			if !m.Mounted {
-				continue
-			}
-			if s.other {
-				if !top[m.Mountpoint] {
-					r += m.Read
-					w += m.Write
+	series := func(s pieSlice, write bool) []float64 {
+		if !s.other {
+			if h := a.hist[s.name]; h != nil {
+				if write {
+					return h.w
 				}
+				return h.r
+			}
+			return nil
+		}
+		var out []float64
+		for _, m := range a.mounts {
+			if !m.Mounted || top[m.Mountpoint] {
 				continue
 			}
-			if m.Mountpoint == s.name {
-				return m.Read, m.Write
+			h := a.hist[m.Mountpoint]
+			if h == nil {
+				continue
 			}
+			v := h.r
+			if write {
+				v = h.w
+			}
+			n := max(len(out), len(v))
+			o := make([]float64, n)
+			copy(o[n-len(out):], out)
+			for i, x := range v {
+				o[n-len(v)+i] += x
+			}
+			out = o
 		}
-		return r, w
+		return out
 	}
+	// global peak over the whole window, across displayed slices and both
+	// directions, so all graphs share a scale (like the old bars did)
 	peak := 0.0
 	for _, s := range sl {
-		if r, w := rate(s); r+w > peak {
-			peak = r + w
+		for _, write := range [2]bool{false, true} {
+			v := series(s, write)
+			from := max(0, len(v)-2*graphW)
+			for _, x := range v[from:] {
+				if x > peak {
+					peak = x
+				}
+			}
 		}
-	}
-	frac := func(v float64) float64 {
-		if peak <= 0 {
-			return 0
-		}
-		return v / peak
 	}
 
-	row := func(head, label, hi string, v float64) string {
+	row := func(head, label, hi string, series []float64) string {
 		var b strings.Builder
 		b.WriteString(head)
 		a.text(&b, " "+label+" ", t.Secondary, "")
-		a.bar(&b, frac(v), barW, hi)
+		a.histGraph(&b, series, graphW, peak, hi)
 		a.text(&b, " ", t.Secondary, "")
-		a.text(&b, padR(formatRate(v), rateW), t.Text, "")
+		last := 0.0
+		if len(series) > 0 {
+			last = series[len(series)-1]
+		}
+		a.text(&b, padR(formatRate(last), rateW), t.Text, "")
 		s := b.String()
 		if vis := visRunes(s); vis < rightW {
 			s += strings.Repeat(" ", rightW-vis)
@@ -863,7 +976,6 @@ func (a *App) piePanel(sl []pieSlice, rightW, n int) []string {
 		if len(rows)+2 > n {
 			break // keep head/write pairs intact; leftover rows stay blank
 		}
-		r, w := rate(s)
 		name := trunc(s.name, nameW)
 		var h strings.Builder
 		h.WriteString(fgSeq(sliceColor(t, s.i, s.other)) + "██" + reset)
@@ -873,8 +985,8 @@ func (a *App) piePanel(sl []pieSlice, rightW, n int) []string {
 		a.text(&h, " "+name+strings.Repeat(" ", nameW-utf8.RuneCountInString(name)), t.Title, "")
 		a.text(&h, " ", t.Secondary, "")
 		a.text(&h, padR(fmt.Sprintf("%.1f%%", s.frac*100), 6), t.Text, "")
-		rows = append(rows, row(h.String(), "r", t.Accent, r))
-		rows = append(rows, row(indent, "w", mix(t.Accent, t.BG, 0.45), w))
+		rows = append(rows, row(h.String(), "r", t.Accent, series(s, false)))
+		rows = append(rows, row(indent, "w", mix(t.Accent, t.BG, 0.45), series(s, true)))
 	}
 	for len(rows) < n {
 		rows = append(rows, strings.Repeat(" ", rightW))

@@ -33,6 +33,7 @@ func TestActPanel(t *testing.T) {
 	for _, w := range []int{160, 100, 80} {
 		a := NewApp(DefaultTheme(), mounts, false, "", "")
 		a.w, a.h = w, 24
+		a.pushHist() // one sample so the graphs have a current tick to show
 		var b strings.Builder
 		a.drawDevices(&b)
 		vis := actAnsi.ReplaceAllString(b.String(), "")
@@ -58,6 +59,7 @@ func TestPiePanelDedup(t *testing.T) {
 		{Mountpoint: "/var/log", Mounted: true, Read: 3 << 20, Write: 1 << 20},
 		{Mountpoint: "/boot", Mounted: true, Read: 0, Write: 0},
 	}, false, "", "")
+	a.pushHist() // one sample so rates show and the graphs aren't empty trays
 	vals := []float64{500, 300, 100, 50, 40, 25, 10}
 	names := []string{"/", "/home", "/mnt", "/boot", "/var", "/run", "/srv"}
 	sl := pieSlices(vals, names)
@@ -75,5 +77,48 @@ func TestPiePanelDedup(t *testing.T) {
 		if got := len([]rune(actAnsi.ReplaceAllString(r, ""))); got != 60 {
 			t.Fatalf("panel row %d is %d runes, want 60", i, got)
 		}
+	}
+}
+
+// TestRateHistory checks pushHist caps each mount's history at histCap and
+// that histGraph keeps rows exactly w cells wide, trays idle cells, and
+// fills braille once traffic shows.
+func TestRateHistory(t *testing.T) {
+	a := NewApp(DefaultTheme(), []Mount{
+		{Mountpoint: "/", Mounted: true, Read: 40e6, Write: 20e6},
+	}, false, "", "")
+	for i := 0; i < 7; i++ { // 7 ticks, oldest first
+		a.mounts[0].Read = float64(i) * 10e6
+		a.pushHist()
+	}
+	h := a.hist["/"]
+	if len(h.r) != 7 || len(h.w) != 7 {
+		t.Fatalf("history depth %d/%d, want 7/7", len(h.r), len(h.w))
+	}
+	if h.r[len(h.r)-1] != 60e6 {
+		t.Fatalf("newest read = %v, want 60e6", h.r[len(h.r)-1])
+	}
+	a.mounts[0].Read = 1
+	for i := 0; i < histCap+10; i++ {
+		a.pushHist()
+	}
+	if len(a.hist["/"].r) != histCap {
+		t.Fatalf("history not capped: %d", len(a.hist["/"].r))
+	}
+
+	var b strings.Builder
+	a.histGraph(&b, []float64{0, 0, 40e6, 80e6, 80e6}, 5, 80e6, "#fff")
+	vis := actAnsi.ReplaceAllString(b.String(), "")
+	if got := utf8RuneLen(vis); got != 5 {
+		t.Fatalf("graph is %d cells, want 5", got)
+	}
+	if !strings.Contains(vis, "⣀") {
+		t.Fatal("zero samples should stay on the tray baseline")
+	}
+	var b2 strings.Builder
+	a.histGraph(&b2, []float64{80e6, 80e6, 80e6, 80e6, 80e6, 80e6, 80e6, 80e6, 80e6, 80e6}, 5, 80e6, "#fff")
+	vis2 := actAnsi.ReplaceAllString(b2.String(), "")
+	if strings.Count(vis2, "⣀") != 0 || vis2 == "" {
+		t.Fatalf("full-scale samples should fill braille, got %q", vis2)
 	}
 }

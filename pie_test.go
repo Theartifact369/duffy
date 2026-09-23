@@ -14,16 +14,19 @@ func TestMix(t *testing.T) {
 	}
 }
 
-// TestPieMatrixSplit checks a 50/50 pie splits its pixels roughly in half,
-// and a full pie fills everything inside the circle.
-func TestPieMatrixSplit(t *testing.T) {
-	m := pieMatrix(5, []float64{0.5, 0.5})
+// TestPieBrailleSplit checks a 50/50 pie splits its cells roughly in half,
+// and a full pie fills every cell (the disc covers the whole dot grid).
+func TestPieBrailleSplit(t *testing.T) {
+	m := pieBraille(5, []float64{0.5, 0.5})
 	c0, c1 := 0, 0
 	for _, row := range m {
-		for _, p := range row {
-			if p.in && p.si == 0 {
+		for _, c := range row {
+			if c.mask == 0 {
+				continue
+			}
+			if c.si == 0 {
 				c0++
-			} else if p.in && p.si == 1 {
+			} else if c.si == 1 {
 				c1++
 			}
 		}
@@ -32,13 +35,15 @@ func TestPieMatrixSplit(t *testing.T) {
 	if diff < 0 {
 		diff = -diff
 	}
-	if c0+c1 == 0 || diff > 20 {
-		t.Fatalf("50/50 pie unbalanced: %d vs %d pixels", c0, c1)
+	if c0+c1 == 0 || diff > 12 {
+		t.Fatalf("50/50 pie unbalanced: %d vs %d cells", c0, c1)
 	}
 
-	one := pieMatrix(5, []float64{1})
-	if one[5][5] != (piePixel{true, 0}) {
-		t.Fatal("center pixel not filled in full pie")
+	one := pieBraille(5, []float64{1})
+	// the cell containing the center dot is fully filled (all 8 dots)
+	center := one[2][5] // dot (10,10) -> cell row 2 (dots 8..11), col 5 (dots 10..11)
+	if center.mask != 0xFF || center.si != 0 {
+		t.Fatalf("center cell = %#v, want full mask in slice 0", center)
 	}
 }
 

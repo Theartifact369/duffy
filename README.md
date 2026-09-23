@@ -7,17 +7,20 @@ A small disk-usage TUI that shares btop's look and theme files.
   (five largest slices + "other") when the terminal is wide and tall enough,
   and nearly-full mounts (≥ 90%) flagged in red. The pie's key shares the
   box with a btop-style disk-activity readout: each slice gets two rows —
-  swatch, name, share, and live read/write bars and rates — in pie order,
-  so every mount's name appears exactly once, next to both its share and
-  its I/O. The device list auto-refreshes every 2 s, so plugged-in drives
-  appear on their own. Selecting a mount shows a deep-dive box below the
+  swatch, name, share, and per-mount read/write history graphs (~2.4 min of
+  2 s samples, scaled to the busiest of them) with the current rate — in pie
+  order, so every mount's name appears exactly once, next to both its share
+  and its I/O. The device list auto-refreshes every 2 s, so plugged-in drives
+  appear on their own; history grows leftward as new samples land on the
+  right edge. Selecting a mount shows a deep-dive box below the
   list: inode usage bar, live read/write rates (from `/proc/diskstats`),
   and the biggest directories under that mount, scanned in the background.
 - **Browse view** — enter any mount or directory, entries sized and sorted
   biggest-first (like ncdu), with live progress while scanning.
 - **btop theming** — reads btop `.theme` files directly, so `duffy` and `btop`
   match out of the box. Edit `~/.config/btop/themes/*.theme` and both change.
-  Usage bars use btop's dotted braille meter glyphs (`⣿⢸⣀`).
+  Usage bars, the activity graphs, and the pie chart all use btop's dotted
+  braille glyphs (`⣿⢸⣀`).
 - **Theme menu** — press `m` to pick from your themes plus the Omarchy system
   theme; the choice persists in `~/.config/duffy/config`.
 - Read-only browsing; mount/unmount on the devices view via udisks2
