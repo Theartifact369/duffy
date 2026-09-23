@@ -2,7 +2,6 @@ package main
 
 import (
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -43,30 +42,28 @@ func TestPieMatrixSplit(t *testing.T) {
 	}
 }
 
-// TestBuildPieWidth renders pie lines at width 80 and checks each is exactly
-// inner runes wide (strip ANSI), with a legend entry per row.
-func TestBuildPieWidth(t *testing.T) {
+// TestPieChartWidth renders pie lines and checks each is exactly S runes
+// wide (strip ANSI); the key/legend lives in piePanel, so the chart itself
+// carries no text.
+func TestPieChartWidth(t *testing.T) {
 	a := &App{theme: DefaultTheme()}
 	// seven mounts: the two smallest group into an "other" slice
 	lines := a.buildPie(
 		[]float64{500, 300, 100, 50, 40, 25, 10},
-		[]string{"/", "/home", "/mnt", "/boot", "/var", "/run", "/srv"}, 78, 7)
+		[]string{"/", "/home", "/mnt", "/boot", "/var", "/run", "/srv"}, 7)
 	if len(lines) == 0 {
 		t.Fatal("no pie lines")
 	}
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 	for i, l := range lines {
-		vis := ansi.ReplaceAllString(l, "")
-		// rows are "│ " + line + "│", so the frame (inner+2) needs line = inner-1
-		if got := utf8RuneLen(vis); got != 77 {
-			t.Fatalf("line %d is %d runes, want 77", i, got)
+		if got := utf8RuneLen(ansi.ReplaceAllString(l, "")); got != 15 {
+			t.Fatalf("line %d is %d runes, want 15 (2R+1 chart only)", i, got)
 		}
 	}
-	if !strings.Contains(ansi.ReplaceAllString(lines[0], ""), "██") {
-		t.Fatal("legend swatch missing")
-	}
-	if !strings.Contains(ansi.ReplaceAllString(strings.Join(lines, ""), ""), "other") {
-		t.Fatal("small slices did not group into 'other'")
+	sl := pieSlices([]float64{500, 300, 100, 50, 40, 25, 10},
+		[]string{"/", "/home", "/mnt", "/boot", "/var", "/run", "/srv"})
+	if len(sl) != 6 || !sl[5].other || sl[5].name != "other" {
+		t.Fatalf("expected top-5 + other, got %+v", sl)
 	}
 }
 

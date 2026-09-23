@@ -5,7 +5,6 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 // mix returns the hex color t of the way from a to b.
@@ -69,13 +68,59 @@ func pieBase(t Theme) []string {
 	}
 }
 
-// buildPie renders the devices-view pie: one string per text row, exactly
-// pieW-1 runes wide (pie cells + legend + padding, no border). vals are used
-// bytes per mount, names their mountpoints. Small slices are grouped into
-// an "other" slice colored Secondary. R is the pie radius, so the chart is
-// (2R+1) cells wide and R+1 text rows tall — round on 2:1 cells. Returns
-// nil when there's no room or nothing to show.
-func (a *App) buildPie(vals []float64, names []string, pieW, R int) []string {
+// sliceColor returns the palette color of pie slice i (its swatch and its
+// chart fill match); the "other" slice is Secondary.
+func sliceColor(t Theme, i int, other bool) string {
+	if other {
+		return t.Secondary
+	}
+	return pieBase(t)[i%len(pieBase(t))]
+}
+
+// pieSlice is one pie chart slice: its label, share, and palette index.
+type pieSlice struct {
+	name  string
+	frac  float64
+	other bool
+	i     int // palette index (irrelevant for "other")
+}
+
+// pieSlices groups vals into the chart's slices: the five largest by size,
+// everything else folded into "other". Same ordering the pie draws.
+func pieSlices(vals []float64, names []string) []pieSlice {
+	total := 0.0
+	for _, v := range vals {
+		total += v
+	}
+	if total <= 0 {
+		return nil
+	}
+	idx := make([]int, len(vals))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(i, j int) bool { return vals[idx[i]] > vals[idx[j]] })
+	var sl []pieSlice
+	rest := 0.0
+	for k, i := range idx {
+		if k < 5 {
+			sl = append(sl, pieSlice{names[i], vals[i] / total, false, k})
+		} else {
+			rest += vals[i] / total
+		}
+	}
+	if rest > 0 {
+		sl = append(sl, pieSlice{"other", rest, true, len(sl)})
+	}
+	return sl
+}
+
+// buildPie renders the devices-view pie chart: one string per text row,
+// exactly S = 2R+1 runes wide (no border). It carries no legend — the key
+// lives in piePanel, which renders next to it so names aren't duplicated.
+// vals are used bytes per mount, names their mountpoints. Returns nil when
+// there's nothing to show.
+func (a *App) buildPie(vals []float64, names []string, R int) []string {
 	t := a.theme
 	total := 0.0
 	for _, v := range vals {
@@ -84,37 +129,7 @@ func (a *App) buildPie(vals []float64, names []string, pieW, R int) []string {
 	if total <= 0 {
 		return nil
 	}
-
-	// largest slices first; five on the chart, the rest as "other"
-	idx := make([]int, len(vals))
-	for i := range idx {
-		idx[i] = i
-	}
-	sort.Slice(idx, func(i, j int) bool { return vals[idx[i]] > vals[idx[j]] })
-	type slice struct {
-		name string
-		frac float64
-	}
-	var sl []slice
-	rest := 0.0
-	for k, i := range idx {
-		if k < 5 {
-			sl = append(sl, slice{names[i], vals[i] / total})
-		} else {
-			rest += vals[i] / total
-		}
-	}
-	if rest > 0 {
-		sl = append(sl, slice{"other", rest})
-	}
-
-	base := pieBase(t)
-	col := func(i int) string {
-		if sl[i].name == "other" {
-			return t.Secondary
-		}
-		return base[i%len(base)]
-	}
+	sl := pieSlices(vals, names)
 	fracs := make([]float64, len(sl))
 	for i, s := range sl {
 		fracs[i] = s.frac
@@ -125,10 +140,6 @@ func (a *App) buildPie(vals []float64, names []string, pieW, R int) []string {
 	}
 	S := 2*R + 1
 	textRows := (S + 1) / 2
-	maxName := pieW - S - 2 - 10 // pie + gap + swatch/space/pct
-	if maxName < 3 {
-		return nil
-	}
 	m := pieMatrix(R, fracs)
 
 	lines := make([]string, 0, textRows)
@@ -142,33 +153,19 @@ func (a *App) buildPie(vals []float64, names []string, pieW, R int) []string {
 			}
 			switch {
 			case top.in && bot.in && top.si == bot.si:
-				pie.WriteString(fgSeq(col(top.si)) + "█")
+				pie.WriteString(fgSeq(sliceColor(t, top.si, sl[top.si].other)) + "█")
 			case top.in && bot.in: // two slices meet in one cell
-				pie.WriteString(fgSeq(col(top.si)) + bgSeq(col(bot.si)) + "▀")
+				pie.WriteString(fgSeq(sliceColor(t, top.si, sl[top.si].other)) + bgSeq(sliceColor(t, bot.si, sl[bot.si].other)) + "▀")
 			case top.in:
-				pie.WriteString(fgSeq(col(top.si)) + bgSeq(t.BG) + "▀")
+				pie.WriteString(fgSeq(sliceColor(t, top.si, sl[top.si].other)) + bgSeq(t.BG) + "▀")
 			case bot.in:
-				pie.WriteString(fgSeq(col(bot.si)) + bgSeq(t.BG) + "▄")
+				pie.WriteString(fgSeq(sliceColor(t, bot.si, sl[bot.si].other)) + bgSeq(t.BG) + "▄")
 			default:
 				pie.WriteString(" ")
 			}
 		}
 		pie.WriteString(reset + bgSeq(t.BG))
-
-		var leg strings.Builder
-		if r < len(sl) {
-			leg.WriteString(fgSeq(col(r)) + "██ ")
-			name := trunc(sl[r].name, maxName)
-			leg.WriteString(fgSeq(t.Secondary) + name +
-				strings.Repeat(" ", maxName-utf8.RuneCountInString(name)))
-			leg.WriteString(fgSeq(t.Text) +
-				padR(fmt.Sprintf("%.1f%%", sl[r].frac*100), 7))
-		} else {
-			leg.WriteString(strings.Repeat(" ", 10+maxName))
-		}
-		leg.WriteString(reset + bgSeq(t.BG))
-
-		lines = append(lines, pie.String()+" "+leg.String())
+		lines = append(lines, pie.String())
 	}
 	return lines
 }

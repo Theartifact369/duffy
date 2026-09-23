@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -787,73 +786,98 @@ func (a *App) drawDetail(b *strings.Builder, inner int, lines []detailLine) {
 	a.boxBottom(b)
 }
 
-// actRow renders one row of the disk-activity panel next to the pie: a
-// name, an r/w label, a braille bar sized as rate/peak, and the live rate.
-func (a *App) actRow(w, nameW, rateW, barW int, name, label, hi string, rate, peak float64) string {
+// piePanel builds the right-hand column of the "used by device" box: the
+// pie's key and its btop-style disk-activity readout in one. Each slice
+// gets two rows — a head row (swatch, name, share, read bar and rate) and
+// a write row — so every mount's name appears exactly once, next to both
+// its share and its live r/w. The "other" slice sums its mounts' rates. n
+// is the row budget (2 per slice); leftover rows stay blank so the panel
+// lines up with the chart.
+func (a *App) piePanel(sl []pieSlice, rightW, n int) []string {
 	t := a.theme
-	var b strings.Builder
-	name += strings.Repeat(" ", max(0, nameW-utf8.RuneCountInString(name)))
-	a.text(&b, name, t.Title, "")
-	a.text(&b, " "+label+" ", t.Secondary, "")
-	frac := 0.0
-	if peak > 0 {
-		frac = rate / peak
-	}
-	a.bar(&b, frac, barW, hi) // bar() clamps 0..1
-	a.text(&b, " ", t.Secondary, "")
-	a.text(&b, padR(formatRate(rate), rateW), t.Text, "")
-	s := b.String()
-	if vis := visRunes(s); vis < w {
-		s += strings.Repeat(" ", w-vis)
-	}
-	return s
-}
-
-// actLines builds the btop-style disk-activity panel for the "used by
-// device" box: each mount gets a read row and a write row, bars scaled to
-// the busiest mount so they stay comparable, plus live rates. n is the row
-// budget (2 rows per mount); leftover rows are blank so the panel always
-// lines up with the pie.
-func (a *App) actLines(actW, n int) []string {
-	t := a.theme
-	nameW := min(14, actW/3)
+	nameW := min(30, max(6, rightW-42))
 	rateW := 8
-	barW := actW - nameW - rateW - 4 // name + " r " + bar + rate
+	barW := rightW - nameW - rateW - 14 // swatch(2)+3 spaces+pct(6)+label+bar+rate
+	if barW > 36 {
+		barW = 36
+	}
 	if barW < 0 {
 		barW = 0 // bar() no-ops at w<=0
 	}
-	if barW > 24 {
-		barW = 24
+	indent := strings.Repeat(" ", nameW+10) // everything before the r/w label
+
+	// rates: the matching mount for real slices, summed mounts for "other"
+	top := make(map[string]bool, len(sl))
+	for _, s := range sl {
+		if !s.other {
+			top[s.name] = true
+		}
+	}
+	rate := func(s pieSlice) (r, w float64) {
+		for _, m := range a.mounts {
+			if !m.Mounted {
+				continue
+			}
+			if s.other {
+				if !top[m.Mountpoint] {
+					r += m.Read
+					w += m.Write
+				}
+				continue
+			}
+			if m.Mountpoint == s.name {
+				return m.Read, m.Write
+			}
+		}
+		return r, w
+	}
+	peak := 0.0
+	for _, s := range sl {
+		if r, w := rate(s); r+w > peak {
+			peak = r + w
+		}
+	}
+	frac := func(v float64) float64 {
+		if peak <= 0 {
+			return 0
+		}
+		return v / peak
 	}
 
-	peak := 0.0
-	var shown []Mount
-	for _, m := range a.mounts {
-		if !m.Mounted {
-			continue
+	row := func(head, label, hi string, v float64) string {
+		var b strings.Builder
+		b.WriteString(head)
+		a.text(&b, " "+label+" ", t.Secondary, "")
+		a.bar(&b, frac(v), barW, hi)
+		a.text(&b, " ", t.Secondary, "")
+		a.text(&b, padR(formatRate(v), rateW), t.Text, "")
+		s := b.String()
+		if vis := visRunes(s); vis < rightW {
+			s += strings.Repeat(" ", rightW-vis)
 		}
-		shown = append(shown, m)
-		if rw := m.Read + m.Write; rw > peak {
-			peak = rw
-		}
+		return s
 	}
-	// ponytail: busiest mount on top; order can swap between refreshes when
-	// two mounts are near-equal, acceptable for a glanceable panel
-	sort.Slice(shown, func(i, j int) bool {
-		return shown[i].Read+shown[i].Write > shown[j].Read+shown[j].Write
-	})
 
 	rows := make([]string, 0, n)
-	for _, m := range shown {
+	for _, s := range sl {
 		if len(rows)+2 > n {
-			break // keep r/w pairs intact; leftover rows stay blank
+			break // keep head/write pairs intact; leftover rows stay blank
 		}
-		name := trunc(m.Mountpoint, nameW)
-		rows = append(rows, a.actRow(actW, nameW, rateW, barW, name, "r", t.Accent, m.Read, peak))
-		rows = append(rows, a.actRow(actW, nameW, rateW, barW, strings.Repeat(" ", nameW), "w", mix(t.Accent, t.BG, 0.45), m.Write, peak))
+		r, w := rate(s)
+		name := trunc(s.name, nameW)
+		var h strings.Builder
+		h.WriteString(fgSeq(sliceColor(t, s.i, s.other)) + "██" + reset)
+		if t.BG != "" {
+			h.WriteString(bgSeq(t.BG))
+		}
+		a.text(&h, " "+name+strings.Repeat(" ", nameW-utf8.RuneCountInString(name)), t.Title, "")
+		a.text(&h, " ", t.Secondary, "")
+		a.text(&h, padR(fmt.Sprintf("%.1f%%", s.frac*100), 6), t.Text, "")
+		rows = append(rows, row(h.String(), "r", t.Accent, r))
+		rows = append(rows, row(indent, "w", mix(t.Accent, t.BG, 0.45), w))
 	}
 	for len(rows) < n {
-		rows = append(rows, strings.Repeat(" ", actW))
+		rows = append(rows, strings.Repeat(" ", rightW))
 	}
 	return rows
 }
@@ -891,55 +915,38 @@ func (a *App) drawDevices(b *strings.Builder) {
 		}
 		// table keeps at least all n mounts: hint(1) + borders(2) + n +
 		// detailMax + pie(R+3) <= a.h, so R = a.h - 6 - n - detailMax.
-		// The pie can't be wider than the name column allows: legend needs
-		// maxName >= 3, and maxName = pieW - (2R+1) - 2 - 10, so
-		// R <= (pieW-16)/2. Let both constraints bind — tall/wide terminals
-		// get the full free-lines chart, not a fixed mid-size.
-		// Wide terminals earn a btop-style disk-activity panel on the right
-		// (per-mount read/write bars); the pie shares the remaining column.
-		actW := 0
-		if a.w >= 94 {
-			actW = clamp(inner/3, 26, 44)
-		}
-		pieW := inner - actW
-		// leave two cells of breathing room before the activity panel
-		pieBudget := pieW
-		if actW > 0 {
-			pieBudget = pieW - 2
-		}
+		// The pie must also share the row with the key/activity panel on
+		// its right (panel needs ~36 cells), so R <= (inner-38)/2. Let
+		// both constraints bind — tall/wide terminals get the full
+		// free-lines chart, not a fixed mid-size.
 		R := a.h - 6 - len(a.mounts) - detailMax
-		if maxR := (pieBudget - 16) / 2; R > maxR {
+		if maxR := (inner - 38) / 2; R > maxR {
 			R = maxR
 		}
 		if R < 7 {
 			R = 7
 		}
-		lines := a.buildPie(vals, names, pieBudget, R)
-		var acts []string
-		if lines == nil && actW > 0 {
-			// pie couldn't share the width — give it the full frame
-			actW, pieBudget = 0, inner
-			if maxR := (pieBudget - 16) / 2; R > maxR {
-				R = maxR
-			}
-			if R < 7 {
-				R = 7
-			}
-			lines = a.buildPie(vals, names, pieBudget, R)
-		} else if lines != nil {
-			acts = a.actLines(actW, len(lines))
-		}
-		if lines != nil {
+		if lines := a.buildPie(vals, names, R); lines != nil {
 			pieBox = len(lines) + 2 // rows inside, plus top/bottom borders
+			// the panel is the pie's key AND its disk-activity readout,
+			// so the legend doesn't repeat the mount names
+			rightW := inner - (2*R + 1) - 2 // chart + 1 gap + panel
+			var panel []string
+			if sl := pieSlices(vals, names); rightW >= 36 {
+				panel = a.piePanel(sl, rightW, len(lines))
+			}
 			a.boxTop(b, inner, "used by device")
 			for i, l := range lines {
+				row := l
+				if i < len(panel) {
+					row += " " + panel[i]
+				}
+				if vis := visRunes(row); vis < inner-1 {
+					row += strings.Repeat(" ", inner-1-vis)
+				}
 				b.WriteString(fgSeq(t.Border))
 				b.WriteString("│ ")
-				b.WriteString(l)
-				if i < len(acts) {
-					b.WriteString("  ")
-					b.WriteString(acts[i])
-				}
+				b.WriteString(row)
 				b.WriteString(fgSeq(t.Border))
 				b.WriteString("│")
 				b.WriteString(reset)
