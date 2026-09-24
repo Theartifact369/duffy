@@ -1,5 +1,7 @@
 # duffy
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A small disk-usage TUI that shares btop's look and theme files.
 
 - **Devices view** — df-style table of mounts with a device column, usage
@@ -80,3 +82,7 @@ box borders), `selected_bg`, `selected_fg`, `inactive_fg`
 | `g` `G` `PgUp` `PgDn` | top / bottom / page |
 | `m` | open theme menu (`Enter` applies, `Esc`/`←` closes) |
 | `q` | quit |
+
+## License
+
+MIT — see [LICENSE](LICENSE).
