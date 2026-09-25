@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+![Duffy disk usage TUI](assets/duffy.png)
+
 A small disk-usage TUI that shares btop's look and theme files.
 
 - **Devices view** — df-style table of mounts with a device column, usage
